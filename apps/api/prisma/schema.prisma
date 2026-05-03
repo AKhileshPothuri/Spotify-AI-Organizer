@@ -1,0 +1,211 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// User model for authentication
+model User {
+  id                String               @id @default(cuid())
+  spotifyId         String               @unique
+  email             String?              @unique
+  spotifyUsername   String?
+  spotifyDisplayName String?
+  accessToken       String               @db.Text
+  refreshToken      String               @db.Text
+  expiresAt         Int? 
+  
+  // Relations
+  classificationRuns ClassificationRun[]
+  tracks             Track[]
+  classifications    Classification[]
+  playlistProposals  PlaylistProposal[]
+  userConfig         UserConfig?
+  
+  createdAt         DateTime             @default(now())
+  updatedAt         DateTime             @updatedAt
+}
+
+// User configuration and preferences
+model UserConfig {
+  id                String       @id @default(cuid())
+  userId            String       @unique
+  user              User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  llmProvider       String       @default("claude")      // claude | openai | gemini | ollama
+  ollamaBaseUrl     String?                               // for self-hosted Ollama
+  activeDimensions  String[]     @default(["genre", "mood", "language", "occasion", "era", "energyLevel"])
+  
+  customTaxonomy    Json?        // User-defined taxonomy buckets
+  
+  autoSyncEnabled   Boolean      @default(false)
+  autoSyncFrequencyMinutes Int    @default(1440)         // 24 hours default
+  
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
+  
+  @@index([userId])
+}
+
+// Track model for Spotify tracks
+model Track {
+  id              String          @id @default(cuid())
+  userId          String
+  user            User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  spotifyId       String          // Spotify track ID
+  name            String
+  artist          String
+  album           String
+  releaseYear     Int?
+  durationMs      Int
+  
+  // Spotify audio features
+  energy          Float?          // 0-1
+  valence         Float?          // 0-1 (positivity)
+  danceability    Float?          // 0-1
+  tempo           Float?          // BPM
+  acousticness    Float?          // 0-1
+  speechiness     Float?          // 0-1
+  instrumentalness Float?         // 0-1
+  
+  spotifyGenres   String[]        // Genres from Spotify artist object
+  spotifyUrl      String?
+  imageUrl        String?
+  
+  // Relations
+  classifications Classification[]
+  playlistProposals PlaylistProposal[]
+  
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+  
+  @@unique([userId, spotifyId])
+  @@index([userId])
+  @@index([createdAt])
+}
+
+// Classification result for a single track
+model Classification {
+  id              String          @id @default(cuid())
+  userId          String
+  user            User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  trackId         String
+  track           Track           @relation(fields: [trackId], references: [id], onDelete: Cascade)
+  
+  runId           String
+  run             ClassificationRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  
+  // Classification dimensions
+  genres          String[]        @default([])
+  moods           String[]        @default([])
+  language        String          @default("Unknown")
+  occasions       String[]        @default([])
+  era             String?         // Pre-80s, 80s, 90s, 2000s, 2010s, 2020s
+  energyLevel     String          @default("Medium")  // Low, Medium, High
+  customTags      String[]        @default([])
+  
+  // Metadata
+  confidence      Float           @default(0.5)       // 0-1
+  llmModel        String          @default("claude-3-5-sonnet")
+  promptVersion   String          @default("v1.0")
+  
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+  
+  @@unique([trackId, runId])
+  @@index([userId])
+  @@index([runId])
+  @@index([trackId])
+}
+
+// Classification run (batch classification job)
+model ClassificationRun {
+  id              String          @id @default(cuid())
+  userId          String
+  user            User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  status          ClassificationStatus @default(PENDING)
+  scope           String          @default("unclassified") // unclassified | all
+  
+  totalTracks     Int             @default(0)
+  processedTracks Int             @default(0)
+  
+  // Configuration for this run
+  llmProvider     String?
+  activeDimensions String[]       @default([])
+  customTaxonomy  Json?
+  
+  // Job tracking
+  jobId           String?         @unique
+  startedAt       DateTime?
+  completedAt     DateTime?
+  approvedAt      DateTime?
+  
+  error           String?
+  
+  // Relations
+  classifications Classification[]
+  playlistProposals PlaylistProposal[]
+  
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+  
+  @@index([userId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+// Proposed playlist from classification results
+model PlaylistProposal {
+  id              String          @id @default(cuid())
+  userId          String
+  user            User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  runId           String
+  run             ClassificationRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  
+  name            String
+  description     String?         @db.Text
+  
+  dimension       String          // genre | mood | language | occasion | era | energyLevel | custom
+  taxonomyValue   String          // The actual value: "Tamil", "Workout", "90s", etc.
+  
+  trackIds        String[]        // Array of Track IDs in this playlist
+  trackCount      Int             @default(0)
+  
+  visibility      String          @default("private") // public | private
+  
+  // After approval
+  approvedAt      DateTime?
+  spotifyPlaylistId String?
+  spotifyUrl      String?
+  
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+  
+  @@index([userId])
+  @@index([runId])
+  @@index([approvedAt])
+}
+
+// Enum for classification run status
+enum ClassificationStatus {
+  PENDING
+  FETCHING_TRACKS
+  ENRICHING
+  CLASSIFYING
+  AWAITING_APPROVAL
+  APPROVED
+  CREATING_PLAYLISTS
+  DONE
+  FAILED
+  CANCELED
+}

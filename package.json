@@ -1,0 +1,40 @@
+{
+  "name": "spotify-ai-organizer",
+  "version": "0.1.0",
+  "description": "AI-powered, human-in-the-loop Spotify playlist organizer",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20.0.0",
+    "pnpm": ">=9.0.0"
+  },
+  "scripts": {
+    "dev": "turbo run dev --parallel",
+    "build": "turbo run build",
+    "test": "turbo run test",
+    "test:e2e": "turbo run test:e2e --filter web",
+    "lint": "turbo run lint",
+    "typecheck": "turbo run typecheck",
+    "db:migrate": "turbo run db:migrate --filter api",
+    "db:studio": "turbo run db:studio --filter api",
+    "db:seed": "turbo run db:seed --filter api",
+    "docker:up": "docker-compose up -d",
+    "docker:down": "docker-compose down",
+    "classify:test": "turbo run classify:test --filter api",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@typescript-eslint/eslint-plugin": "^7.0.0",
+    "@typescript-eslint/parser": "^7.0.0",
+    "eslint": "^8.56.0",
+    "prettier": "^3.2.0",
+    "turbo": "^1.12.4",
+    "typescript": "^5.3.3"
+  },
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ]
+}

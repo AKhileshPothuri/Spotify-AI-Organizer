@@ -1,0 +1,56 @@
+# Dockerfile for Spotify AI Organizer API
+
+FROM node:20-alpine AS base
+
+# Install dependencies
+RUN apk add --no-cache libc6-compat
+
+WORKDIR /app
+
+# Install pnpm
+RUN npm install -g pnpm
+
+# Copy monorepo configuration
+COPY pnpm-workspace.yaml pnpm-lock.yaml ./
+COPY package.json ./
+
+# Copy packages and apps
+COPY packages ./packages 
+COPY apps/api ./apps/api
+
+# Install dependencies
+RUN pnpm install --frozen-lockfile
+
+# Build stage
+FROM base AS builder
+
+WORKDIR /app
+
+# Build packages
+RUN pnpm --filter "@spotify-organizer/types" build
+
+# Build API
+RUN pnpm --filter "@spotify-organizer/api" build
+
+# Generate Prisma client
+RUN pnpm --filter "@spotify-organizer/api" db:generate
+
+# Runtime stage
+FROM node:20-alpine
+
+WORKDIR /app
+
+RUN apk add --no-cache libc6-compat
+RUN npm install -g pnpm
+
+# Copy only necessary files from builder
+COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/packages ./packages
+COPY --from=builder /app/apps/api ./apps/api
+
+# Copy env file (can be overridden at runtime)
+COPY .env.example .env
+
+EXPOSE 3001
+
+CMD ["node", "apps/api/dist/index.js"]

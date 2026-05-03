@@ -1,0 +1,43 @@
+{
+  "name": "@spotify-organizer/api",
+  "version": "0.1.0",
+  "description": "Spotify AI Organizer - API Server (Fastify)",
+  "type": "module",
+  "main": "./dist/index.js",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "lint": "eslint . --ext .ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest",
+    "db:migrate": "prisma migrate dev",
+    "db:generate": "prisma generate",
+    "db:studio": "prisma studio",
+    "db:seed": "tsx prisma/seed.ts",
+    "classify:test": "tsx src/scripts/testClassify.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.16.1",
+    "@prisma/client": "^5.8.0",
+    "@spotify-organizer/types": "workspace:*",
+    "bullmq": "^5.6.0",
+    "dotenv": "^16.3.1",
+    "fastify": "^4.25.2",
+    "fastify-cors": "^8.5.0",
+    "fastify-jwt": "^8.0.0",
+    "node-cache": "^5.1.2",
+    "openai": "^4.28.0",
+    "zod": "^3.22.4"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@typescript-eslint/eslint-plugin": "^7.0.0",
+    "@typescript-eslint/parser": "^7.0.0",
+    "eslint": "^8.56.0",
+    "prisma": "^5.8.0",
+    "tsx": "^4.7.0",
+    "typescript": "^5.3.3",
+    "vitest": "^1.1.0"
+  }
+}
