@@ -34,8 +34,10 @@
     {
       "files": [
         "**/*.config.ts",
-        "**/*.config.js"
+        "**/*.config.js",
+        "**/*.config.mjs"
       ],
+      "extends": ["plugin:@typescript-eslint/disable-type-checked"],
       "parserOptions": {
         "project": null
       }

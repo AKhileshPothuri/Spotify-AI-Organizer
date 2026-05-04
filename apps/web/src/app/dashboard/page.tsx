@@ -149,7 +149,7 @@ function DashboardContent() {
   }, []);
 
   useEffect(() => {
-    if (user) fetchStats();
+    if (user) void fetchStats();
   }, [user, fetchStats]);
 
   // ── Sync ──────────────────────────────────────────────────────────────────
@@ -164,22 +164,26 @@ function DashboardContent() {
     });
 
     // Poll DB track count until it stabilises
-    syncRef.current = setInterval(async () => {
-      const res = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL}/api/library/sync/status`,
-        { headers: authHeaders() },
-      );
-      if (res.ok) {
-        const { trackCount } = await res.json() as { trackCount: number };
-        setSyncCount(trackCount);
-      }
+    syncRef.current = setInterval(() => {
+      void (async () => {
+        const res = await fetch(
+          `${process.env.NEXT_PUBLIC_API_URL}/api/library/sync/status`,
+          { headers: authHeaders() },
+        );
+        if (res.ok) {
+          const { trackCount } = await res.json() as { trackCount: number };
+          setSyncCount(trackCount);
+        }
+      })();
     }, 2000);
 
     // Stop polling after 5 minutes max; final stats refresh
-    setTimeout(async () => {
-      if (syncRef.current) clearInterval(syncRef.current);
-      setSyncing(false);
-      await fetchStats();
+    setTimeout(() => {
+      void (async () => {
+        if (syncRef.current) clearInterval(syncRef.current);
+        setSyncing(false);
+        await fetchStats();
+      })();
     }, 5 * 60 * 1000);
   }
 
@@ -193,7 +197,7 @@ function DashboardContent() {
     ) {
       if (syncRef.current) clearInterval(syncRef.current);
       setSyncing(false);
-      fetchStats();
+      void fetchStats();
     }
   }, [syncing, syncCount, stats, fetchStats]);
 
@@ -217,20 +221,22 @@ function DashboardContent() {
     const { runId } = await res.json() as { runId: string };
 
     // Poll run status
-    pollRef.current = setInterval(async () => {
-      const r = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL}/api/classify/${runId}`,
-        { headers: authHeaders() },
-      );
-      if (r.ok) {
-        const data = await r.json() as ClassifyRun;
-        setRun(data);
-        if (['AWAITING_APPROVAL', 'DONE', 'FAILED'].includes(data.status)) {
-          if (pollRef.current) clearInterval(pollRef.current);
-          setClassifying(false);
-          fetchStats();
+    pollRef.current = setInterval(() => {
+      void (async () => {
+        const r = await fetch(
+          `${process.env.NEXT_PUBLIC_API_URL}/api/classify/${runId}`,
+          { headers: authHeaders() },
+        );
+        if (r.ok) {
+          const data = await r.json() as ClassifyRun;
+          setRun(data);
+          if (['AWAITING_APPROVAL', 'DONE', 'FAILED'].includes(data.status)) {
+            if (pollRef.current) clearInterval(pollRef.current);
+            setClassifying(false);
+            void fetchStats();
+          }
         }
-      }
+      })();
     }, 3000);
   }
 
@@ -378,7 +384,7 @@ function DashboardContent() {
             )}
 
             <button
-              onClick={handleSync}
+              onClick={() => { void handleSync(); }}
               disabled={syncing}
               className="flex items-center gap-2 bg-white hover:bg-white/90 disabled:opacity-50 disabled:cursor-not-allowed text-black text-sm font-bold px-5 py-2.5 rounded-full transition-all duration-150"
             >
@@ -415,12 +421,15 @@ function DashboardContent() {
                   <RunStatusBadge status={run.status} />
                 </div>
                 <ProgressBar value={run.processedTracks} max={run.totalTracks} />
-                {(run.status === 'AWAITING_APPROVAL' || run.status === 'APPROVED') && (
+                {['AWAITING_APPROVAL', 'APPROVED', 'CREATING_PLAYLISTS', 'DONE'].includes(run.status) && (
                   <a
                     href={`/dashboard/review/${run.id}`}
                     className="flex items-center gap-1 text-xs text-spotify-green hover:text-spotify-green-bright transition-colors"
                   >
-                    {run.status === 'APPROVED' ? 'Approved · View results' : 'Classification complete · Review results'}
+                    {run.status === 'DONE' ? 'Playlists live · View results'
+                      : run.status === 'CREATING_PLAYLISTS' ? 'Pushing to Spotify…'
+                      : run.status === 'APPROVED' ? 'Approved · Push to Spotify'
+                      : 'Classification complete · Review results'}
                     <ChevronRight className="w-3 h-3" />
                   </a>
                 )}
@@ -439,7 +448,7 @@ function DashboardContent() {
             )}
 
             <button
-              onClick={handleClassify}
+              onClick={() => { void handleClassify(); }}
               disabled={!syncDone || classifying || !!runActive}
               className="flex items-center gap-2 bg-spotify-green hover:bg-spotify-green-bright disabled:opacity-40 disabled:cursor-not-allowed text-black text-sm font-bold px-5 py-2.5 rounded-full transition-all duration-150"
             >
@@ -458,7 +467,7 @@ function DashboardContent() {
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
 
           {/* Review Dashboard — live when there's a run to review */}
-          {run && (run.status === 'AWAITING_APPROVAL' || run.status === 'APPROVED') ? (
+          {run && ['AWAITING_APPROVAL', 'APPROVED', 'CREATING_PLAYLISTS', 'DONE'].includes(run.status) ? (
             <a
               href={`/dashboard/review/${run.id}`}
               className="group bg-spotify-surface hover:bg-spotify-elevated rounded-card p-5 transition-colors duration-150"
@@ -499,23 +508,55 @@ function DashboardContent() {
             </div>
           )}
 
-          {/* Create Playlists — coming in v0.4 */}
-          <div className="group bg-spotify-surface hover:bg-spotify-elevated rounded-card p-5 transition-colors duration-150 cursor-default">
-            <div className="flex items-center justify-between mb-3">
-              <div className="w-9 h-9 bg-spotify-green/10 rounded-lg flex items-center justify-center">
-                <ListMusic className="w-4 h-4 text-spotify-green" />
+          {/* Create Playlists — live when run is approved */}
+          {run && ['APPROVED', 'CREATING_PLAYLISTS', 'DONE'].includes(run.status) ? (
+            <a
+              href={`/dashboard/review/${run.id}`}
+              className="group bg-spotify-surface hover:bg-spotify-elevated rounded-card p-5 transition-colors duration-150"
+            >
+              <div className="flex items-center justify-between mb-3">
+                <div className="w-9 h-9 bg-spotify-green/10 rounded-lg flex items-center justify-center">
+                  <ListMusic className="w-4 h-4 text-spotify-green" />
+                </div>
+                <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-full ${
+                  run.status === 'DONE'
+                    ? 'text-spotify-green bg-spotify-green/10'
+                    : run.status === 'CREATING_PLAYLISTS'
+                    ? 'text-blue-400 bg-blue-400/10'
+                    : 'text-spotify-green bg-spotify-green/10'
+                }`}>
+                  {run.status === 'DONE' ? 'Live' : run.status === 'CREATING_PLAYLISTS' ? 'Pushing…' : 'Ready'}
+                </span>
               </div>
-              <span className="text-[11px] font-semibold text-spotify-text-muted bg-spotify-elevated px-2 py-0.5 rounded-full">v0.4</span>
+              <h3 className="font-bold text-white text-sm mb-1">Create Playlists</h3>
+              <p className="text-xs text-spotify-text-subdued leading-relaxed mb-3">
+                {run.status === 'DONE'
+                  ? `${stats?.playlistCount ?? 0} playlist${stats?.playlistCount !== 1 ? 's' : ''} are live on your Spotify account.`
+                  : 'Push your approved proposals to Spotify as real playlists with one click.'}
+              </p>
+              <div className="flex items-center gap-1 text-xs text-spotify-green group-hover:text-spotify-green-bright transition-colors">
+                <span>{run.status === 'DONE' ? 'View playlists' : 'Go to review'}</span>
+                <ChevronRight className="w-3 h-3 group-hover:translate-x-0.5 transition-transform duration-150" />
+              </div>
+            </a>
+          ) : (
+            <div className="group bg-spotify-surface hover:bg-spotify-elevated rounded-card p-5 transition-colors duration-150 cursor-default">
+              <div className="flex items-center justify-between mb-3">
+                <div className="w-9 h-9 bg-spotify-green/10 rounded-lg flex items-center justify-center">
+                  <ListMusic className="w-4 h-4 text-spotify-green" />
+                </div>
+                <span className="text-[11px] font-semibold text-spotify-text-muted bg-spotify-elevated px-2 py-0.5 rounded-full">v0.4</span>
+              </div>
+              <h3 className="font-bold text-white text-sm mb-1">Create Playlists</h3>
+              <p className="text-xs text-spotify-text-subdued leading-relaxed mb-3">
+                One click turns approved proposals into real Spotify playlists in your account.
+              </p>
+              <div className="flex items-center gap-1 text-xs text-spotify-text-muted group-hover:text-spotify-text-subdued transition-colors">
+                <span>Approve classifications first</span>
+                <ChevronRight className="w-3 h-3 group-hover:translate-x-0.5 transition-transform duration-150" />
+              </div>
             </div>
-            <h3 className="font-bold text-white text-sm mb-1">Create Playlists</h3>
-            <p className="text-xs text-spotify-text-subdued leading-relaxed mb-3">
-              One click turns approved proposals into real Spotify playlists in your account.
-            </p>
-            <div className="flex items-center gap-1 text-xs text-spotify-text-muted group-hover:text-spotify-text-subdued transition-colors">
-              <span>Coming soon</span>
-              <ChevronRight className="w-3 h-3 group-hover:translate-x-0.5 transition-transform duration-150" />
-            </div>
-          </div>
+          )}
 
         </div>
 

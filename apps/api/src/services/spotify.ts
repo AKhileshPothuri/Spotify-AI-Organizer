@@ -52,6 +52,52 @@ export async function fetchLikedSongsCount(accessToken: string): Promise<number>
   return data.total;
 }
 
+/** Returns the Spotify user ID for the authenticated user. */
+export async function getSpotifyUserId(accessToken: string): Promise<string> {
+  const res = await fetch('https://api.spotify.com/v1/me', {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (!res.ok) throw new Error(`Spotify /me failed: ${res.status}`);
+  const data = await res.json() as { id: string };
+  return data.id;
+}
+
+/** Creates an empty Spotify playlist and returns its ID and URL. */
+export async function createSpotifyPlaylist(
+  accessToken: string,
+  spotifyUserId: string,
+  name: string,
+  description: string,
+): Promise<{ id: string; url: string }> {
+  const res = await fetch(`https://api.spotify.com/v1/users/${spotifyUserId}/playlists`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, description, public: false }),
+  });
+  if (!res.ok) throw new Error(`Create playlist failed: ${res.status}`);
+  const data = await res.json() as { id: string; external_urls: { spotify: string } };
+  return { id: data.id, url: data.external_urls.spotify };
+}
+
+/** Adds up to 100 tracks per batch to a Spotify playlist (Spotify API limit). */
+export async function addTracksToPlaylist(
+  accessToken: string,
+  playlistId: string,
+  spotifyTrackIds: string[],
+): Promise<void> {
+  const uris = spotifyTrackIds.map(id => `spotify:track:${id}`);
+  // Spotify allows max 100 URIs per request
+  for (let i = 0; i < uris.length; i += 100) {
+    const batch = uris.slice(i, i + 100);
+    const res = await fetch(`https://api.spotify.com/v1/playlists/${playlistId}/tracks`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ uris: batch }),
+    });
+    if (!res.ok) throw new Error(`Add tracks failed: ${res.status}`);
+  }
+}
+
 /** Yields all liked songs page by page (50 per page). */
 export async function* streamLikedSongs(
   accessToken: string,

@@ -9,7 +9,7 @@ const SCOPES = [
   'user-read-email',
 ].join(' ');
 
-export function GET() {
+export function GET(): Response {
   // PKCE: generate a random verifier and its SHA-256 challenge
   const verifier = randomBytes(32).toString('base64url');
   const challenge = createHash('sha256').update(verifier).digest('base64url');
@@ -24,7 +24,7 @@ export function GET() {
   });
 
   const response = NextResponse.redirect(
-    `https://accounts.spotify.com/authorize?${params}`,
+    `https://accounts.spotify.com/authorize?${params.toString()}`,
   );
 
   // Store verifier in httpOnly cookie so the callback route can finish the exchange

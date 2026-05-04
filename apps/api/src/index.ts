@@ -8,7 +8,13 @@ import fastifyJwt from '@fastify/jwt';
 import fastifyCors from '@fastify/cors';
 import { config } from './config/index.js';
 import prisma from './db.js';
-import { getValidToken, fetchLikedSongsCount } from './services/spotify.js';
+import {
+  getValidToken,
+  fetchLikedSongsCount,
+  getSpotifyUserId,
+  createSpotifyPlaylist,
+  addTracksToPlaylist,
+} from './services/spotify.js';
 import { syncLibrary } from './services/library.js';
 import { classifyBatch } from './services/llm.js';
 
@@ -391,7 +397,118 @@ export async function createServer(): Promise<FastifyInstance> {
     },
   );
 
+  // POST /api/classify/:runId/playlists
+  // Pushes all approved PlaylistProposals to Spotify as real playlists
+  fastify.post<{ Params: { runId: string } }>(
+    '/api/classify/:runId/playlists',
+    auth,
+    async (request, reply) => {
+      const { userId } = request.user;
+      const { runId } = request.params;
+
+      const run = await prisma.classificationRun.findFirst({ where: { id: runId, userId } });
+      if (!run) return reply.status(404).send({ error: 'Run not found' });
+      if (run.status !== 'APPROVED') {
+        return reply.status(400).send({ error: `Run is ${run.status}, expected APPROVED` });
+      }
+
+      const proposals = await prisma.playlistProposal.findMany({
+        where: { runId, userId, spotifyPlaylistId: null },
+      });
+      if (proposals.length === 0) {
+        return reply.status(400).send({ error: 'No pending proposals — all playlists may already exist.' });
+      }
+
+      await prisma.classificationRun.update({
+        where: { id: runId },
+        data: { status: 'CREATING_PLAYLISTS' },
+      });
+
+      void pushPlaylists(userId, runId, proposals, fastify.log).catch(err =>
+        fastify.log.error({ err, runId }, 'Playlist creation failed'),
+      );
+
+      return reply.status(202).send({ status: 'CREATING_PLAYLISTS', total: proposals.length });
+    },
+  );
+
+  // GET /api/classify/:runId/playlists
+  // Returns all playlist proposals for a run with their Spotify URLs (if created)
+  fastify.get<{ Params: { runId: string } }>(
+    '/api/classify/:runId/playlists',
+    auth,
+    async (request, reply) => {
+      const { userId } = request.user;
+      const { runId } = request.params;
+
+      const run = await prisma.classificationRun.findFirst({ where: { id: runId, userId } });
+      if (!run) return reply.status(404).send({ error: 'Run not found' });
+
+      const proposals = await prisma.playlistProposal.findMany({
+        where: { runId, userId },
+        select: {
+          id: true, name: true, dimension: true, taxonomyValue: true,
+          trackCount: true, spotifyPlaylistId: true, spotifyUrl: true,
+        },
+        orderBy: [{ dimension: 'asc' }, { trackCount: 'desc' }],
+      });
+
+      const created = proposals.filter(p => p.spotifyPlaylistId !== null).length;
+      return { runStatus: run.status, proposals, created, total: proposals.length };
+    },
+  );
+
   return fastify;
+}
+
+// ─── Background playlist-push worker ─────────────────────────────────────────
+
+async function pushPlaylists(
+  userId: string,
+  runId: string,
+  proposals: { id: string; name: string; description: string | null; trackIds: string[] }[],
+  log: FastifyBaseLogger,
+): Promise<void> {
+  const token = await getValidToken(userId);
+  const spotifyUserId = await getSpotifyUserId(token);
+
+  let created = 0;
+
+  for (const proposal of proposals) {
+    try {
+      // Resolve internal Track IDs → Spotify track IDs
+      const tracks = await prisma.track.findMany({
+        where: { id: { in: proposal.trackIds } },
+        select: { spotifyId: true },
+      });
+      const spotifyIds = tracks.map(t => t.spotifyId).filter(Boolean);
+
+      const { id: playlistId, url: playlistUrl } = await createSpotifyPlaylist(
+        token,
+        spotifyUserId,
+        proposal.name,
+        proposal.description ?? `AI-curated playlist: ${proposal.name}`,
+      );
+
+      await addTracksToPlaylist(token, playlistId, spotifyIds);
+
+      await prisma.playlistProposal.update({
+        where: { id: proposal.id },
+        data: { spotifyPlaylistId: playlistId, spotifyUrl: playlistUrl, approvedAt: new Date() },
+      });
+
+      created++;
+    } catch (err) {
+      log.error({ err, proposalId: proposal.id }, 'Failed to create playlist');
+    }
+  }
+
+  await prisma.classificationRun.update({
+    where: { id: runId },
+    data: { status: 'DONE' },
+  });
+
+  log.info({ runId, created, total: proposals.length }, 'Playlist push complete');
 }
 
 // ─── Background classification worker ────────────────────────────────────────
