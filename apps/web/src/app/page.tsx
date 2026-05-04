@@ -7,15 +7,12 @@ export default function Home() {
           AI-powered, human-in-the-loop playlist organization
         </p>
 
-        <div className="space-y-4">
-          <button className="rounded-lg bg-spotify px-6 py-3 text-white font-semibold hover:bg-opacity-90">
-            Login with Spotify
-          </button>
-
-          <div className="text-sm text-gray-500">
-            <p>Coming soon...</p>
-          </div>
-        </div>
+        <a
+          href="/api/auth/login"
+          className="inline-block rounded-lg bg-spotify px-6 py-3 text-white font-semibold hover:bg-opacity-90"
+        >
+          Login with Spotify
+        </a>
 
         <div className="mt-12 grid grid-cols-3 gap-8">
           <div>

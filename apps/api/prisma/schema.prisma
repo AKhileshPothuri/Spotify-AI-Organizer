@@ -81,7 +81,6 @@ model Track {
   
   // Relations
   classifications Classification[]
-  playlistProposals PlaylistProposal[]
   
   createdAt       DateTime        @default(now())
   updatedAt       DateTime        @updatedAt

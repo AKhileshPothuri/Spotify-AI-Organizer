@@ -58,15 +58,24 @@ git clone https://github.com/akhileshpothuri/spotify-ai-organizer.git
 cd spotify-ai-organizer
 pnpm install
 
-# Configure
+# Configure root env (API + shared vars)
 cp .env.example .env
-# Edit .env with your Spotify Client ID/Secret, LLM API key, etc.
-vim .env
+vim .env   # add Spotify Client ID/Secret, LLM API key, etc.
+
+# Configure Next.js env (frontend API routes need their own .env.local)
+cp .env.example apps/web/.env.local
+vim apps/web/.env.local  # same values — Next.js only reads its own directory
+
+# Spotify OAuth requires HTTPS for the redirect URI.
+# For local dev, start a tunnel and register the HTTPS URL in your Spotify app:
+npx localtunnel --port 3000   # → https://xxxx.loca.lt/api/auth/callback
+# Then set SPOTIFY_REDIRECT_URI=https://xxxx.loca.lt/api/auth/callback in both .env files
 
 # Start services
-pnpm docker:up              # PostgreSQL + Redis
-pnpm db:migrate             # Database setup
-pnpm dev                    # Start dev servers
+pnpm docker:up                              # PostgreSQL + Redis
+pnpm --filter @spotify-organizer/api db:generate && \
+pnpm --filter @spotify-organizer/api db:migrate   # Database setup
+pnpm dev                                    # Start dev servers
 ```
 
 **Frontend:** http://localhost:3000  
@@ -87,9 +96,8 @@ pnpm dev                    # Start dev servers
 ### ✅ v0.1.0 (Foundation - Done)
 - Monorepo setup (pnpm + Turborepo)
 - Docker Compose (Postgres + Redis)
-- Spotify OAuth flow
-- Fetch liked songs + audio features
-- Database schema
+- Spotify OAuth (PKCE, Next.js API routes, Fastify user upsert, JWT)
+- Database schema (User, Track, Classification, PlaylistProposal models)
 
 ### 🚧 v0.2.0–v0.4.0 (In Development)
 - LLM classification engine
@@ -170,10 +178,17 @@ See [.env.example](.env.example) for all options.
 
 ### Authentication
 
+OAuth is handled by Next.js API routes (server-side, keeps client secret hidden):
+
 ```bash
-GET /auth/spotify                    # Start OAuth flow
-GET /auth/spotify/callback?code=...  # OAuth callback
-POST /auth/refresh                   # Refresh JWT
+GET  /api/auth/login                 # Redirects browser to Spotify (PKCE)
+GET  /api/auth/callback?code=...     # Spotify redirects here; exchanges code, returns JWT
+```
+
+The Fastify API exposes one auth endpoint (called server-to-server by Next.js):
+
+```bash
+POST /api/auth/token                 # Receives Spotify tokens, upserts user, returns app JWT
 ```
 
 ### Classification
@@ -332,7 +347,7 @@ See [SECURITY.md](./SECURITY.md) for details.
 
 ## License
 
-MIT © 2024 [Akhilesh Pothuri](https://github.com/akhileshpothuri)
+MIT © 2026 [Akhilesh Pothuri](https://github.com/AKhileshPothuri)
 
 See [LICENSE](./LICENSE) for details.
 
@@ -340,5 +355,3 @@ See [LICENSE](./LICENSE) for details.
 
 **Made with ❤️ to help you organize your music.**  
 ⭐ If you find this useful, please star the repo!
-
-**[Demo](https://spotify-organizer.demo.com)** | **[Docs](./docs/)** | **[Discord](#)** | **[Sponsor](#)**

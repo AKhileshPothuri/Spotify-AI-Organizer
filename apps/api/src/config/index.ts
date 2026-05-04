@@ -1,4 +1,10 @@
 import { z } from 'zod';
+import { config as loadEnv } from 'dotenv';
+import path from 'path';
+
+// Load .env from root directory
+const envPath = path.resolve(process.cwd(), '../..', '.env');
+loadEnv({ path: envPath });
 
 const envSchema = z.object({
   // Core
@@ -29,6 +35,7 @@ const envSchema = z.object({
   // API
   API_BASE_URL: z.string().url().optional(),
   NEXT_PUBLIC_API_URL: z.string().url().optional(),
+  CORS_ORIGIN: z.string().default('*').optional(),
 
   // Optional
   RATE_LIMIT_WINDOW_MS: z.coerce.number().default(60000),
