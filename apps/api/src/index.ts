@@ -1,4 +1,9 @@
-import Fastify from 'fastify';
+import Fastify, {
+  type FastifyInstance,
+  type FastifyRequest,
+  type FastifyReply,
+  type FastifyBaseLogger,
+} from 'fastify';
 import fastifyJwt from '@fastify/jwt';
 import fastifyCors from '@fastify/cors';
 import { config } from './config/index.js';
@@ -7,9 +12,23 @@ import { getValidToken, fetchLikedSongsCount } from './services/spotify.js';
 import { syncLibrary } from './services/library.js';
 import { classifyBatch } from './services/llm.js';
 
-interface JwtUser { userId: string; spotifyId: string }
+// ─── Type augmentation ────────────────────────────────────────────────────────
 
-export async function createServer() {
+declare module '@fastify/jwt' {
+  interface FastifyJWT {
+    user: { userId: string; spotifyId: string };
+  }
+}
+
+declare module 'fastify' {
+  interface FastifyInstance {
+    authenticate(request: FastifyRequest, reply: FastifyReply): Promise<void>;
+  }
+}
+
+// ─── Server factory ───────────────────────────────────────────────────────────
+
+export async function createServer(): Promise<FastifyInstance> {
   const fastify = Fastify({ logger: { level: config.LOG_LEVEL } });
 
   await fastify.register(fastifyCors, {
@@ -19,20 +38,22 @@ export async function createServer() {
 
   await fastify.register(fastifyJwt, { secret: config.JWT_SECRET });
 
-  // Auth guard reusable across routes
-  fastify.decorate('authenticate', async function (request: any, reply: any) {
-    try {
-      await request.jwtVerify();
-    } catch {
-      reply.status(401).send({ error: 'Unauthorized' });
-    }
-  });
+  fastify.decorate(
+    'authenticate',
+    async function handler(request: FastifyRequest, reply: FastifyReply): Promise<void> {
+      try {
+        await request.jwtVerify();
+      } catch {
+        await reply.status(401).send({ error: 'Unauthorized' });
+      }
+    },
+  );
 
   // ─── Public ────────────────────────────────────────────────────────────────
 
-  fastify.get('/health', async () => ({ status: 'ok', timestamp: new Date().toISOString() }));
+  fastify.get('/health', () => ({ status: 'ok', timestamp: new Date().toISOString() }));
 
-  fastify.get('/v1', async () => ({
+  fastify.get('/v1', () => ({
     version: '0.2.0',
     name: 'Spotify AI Organizer API',
   }));
@@ -79,12 +100,12 @@ export async function createServer() {
 
   // ─── Protected ─────────────────────────────────────────────────────────────
 
-  const auth = { preHandler: [(fastify as any).authenticate] };
+  const auth = { preHandler: [fastify.authenticate.bind(fastify)] };
 
   // GET /api/library/stats
   // Returns track count from DB + Spotify's live total
   fastify.get('/api/library/stats', auth, async (request) => {
-    const { userId } = (request as any).user as JwtUser;
+    const { userId } = request.user;
 
     const [trackCount, runCount, playlistCount, latestRun] = await Promise.all([
       prisma.track.count({ where: { userId } }),
@@ -114,7 +135,7 @@ export async function createServer() {
   // POST /api/library/sync
   // Kicks off a background sync; returns 202 immediately
   fastify.post('/api/library/sync', auth, async (request, reply) => {
-    const { userId } = (request as any).user as JwtUser;
+    const { userId } = request.user;
 
     void syncLibrary(userId).catch(err =>
       fastify.log.error({ err }, 'Library sync failed'),
@@ -126,7 +147,7 @@ export async function createServer() {
   // GET /api/library/sync/status
   // Quick poll — returns current track count in DB
   fastify.get('/api/library/sync/status', auth, async (request) => {
-    const { userId } = (request as any).user as JwtUser;
+    const { userId } = request.user;
     const trackCount = await prisma.track.count({ where: { userId } });
     return { trackCount };
   });
@@ -137,7 +158,7 @@ export async function createServer() {
     '/api/classify/run',
     auth,
     async (request, reply) => {
-      const { userId } = (request as any).user as JwtUser;
+      const { userId } = request.user;
       const scope = request.body?.scope ?? 'unclassified';
 
       const trackCount = await prisma.track.count({ where: { userId } });
@@ -170,12 +191,41 @@ export async function createServer() {
     '/api/classify/:runId',
     auth,
     async (request, reply) => {
-      const { userId } = (request as any).user as JwtUser;
+      const { userId } = request.user;
       const run = await prisma.classificationRun.findFirst({
         where: { id: request.params.runId, userId },
       });
       if (!run) return reply.status(404).send({ error: 'Run not found' });
       return run;
+    },
+  );
+
+  // PATCH /api/classify/:runId/classifications/:classificationId
+  // Inline edit — updates any subset of classification fields
+  fastify.patch<{
+    Params: { runId: string; classificationId: string };
+    Body: {
+      genres?: string[]; moods?: string[]; language?: string;
+      occasions?: string[]; era?: string | null; energyLevel?: string;
+    };
+  }>(
+    '/api/classify/:runId/classifications/:classificationId',
+    auth,
+    async (request, reply) => {
+      const { userId } = request.user;
+      const { runId, classificationId } = request.params;
+
+      const existing = await prisma.classification.findFirst({
+        where: { id: classificationId, runId, userId },
+      });
+      if (!existing) return reply.status(404).send({ error: 'Classification not found' });
+
+      const updated = await prisma.classification.update({
+        where: { id: classificationId },
+        data: request.body,
+      });
+
+      return { id: updated.id, updatedAt: updated.updatedAt };
     },
   );
 
@@ -185,7 +235,7 @@ export async function createServer() {
     '/api/classify/:runId/summary',
     auth,
     async (request, reply) => {
-      const { userId } = (request as any).user as JwtUser;
+      const { userId } = request.user;
       const run = await prisma.classificationRun.findFirst({
         where: { id: request.params.runId, userId },
       });
@@ -200,12 +250,12 @@ export async function createServer() {
         for (const v of values) if (v) map.set(v, (map.get(v) ?? 0) + 1);
       };
 
-      const genreMap = new Map<string, number>();
-      const moodMap  = new Map<string, number>();
-      const langMap  = new Map<string, number>();
-      const occMap   = new Map<string, number>();
-      const eraMap   = new Map<string, number>();
-      const energyMap = new Map<string, number>();
+      const genreMap   = new Map<string, number>();
+      const moodMap    = new Map<string, number>();
+      const langMap    = new Map<string, number>();
+      const occMap     = new Map<string, number>();
+      const eraMap     = new Map<string, number>();
+      const energyMap  = new Map<string, number>();
 
       for (const c of all) {
         tally(genreMap, c.genres);
@@ -239,7 +289,7 @@ export async function createServer() {
     '/api/classify/:runId/tracks',
     auth,
     async (request, reply) => {
-      const { userId } = (request as any).user as JwtUser;
+      const { userId } = request.user;
       const { runId } = request.params;
       const { dimension, value, page = '1', limit = '100' } = request.query;
 
@@ -284,7 +334,7 @@ export async function createServer() {
     '/api/classify/:runId/approve',
     auth,
     async (request, reply) => {
-      const { userId } = (request as any).user as JwtUser;
+      const { userId } = request.user;
       const { runId } = request.params;
 
       const run = await prisma.classificationRun.findFirst({ where: { id: runId, userId } });
@@ -349,8 +399,8 @@ export async function createServer() {
 async function runClassification(
   userId: string,
   runId: string,
-  log: any,
-) {
+  log: FastifyBaseLogger,
+): Promise<void> {
   const BATCH = config.BATCH_SIZE;
 
   await prisma.classificationRun.update({
@@ -417,7 +467,7 @@ async function runClassification(
 
 // ─── Start ───────────────────────────────────────────────────────────────────
 
-export async function start() {
+export async function start(): Promise<void> {
   try {
     const fastify = await createServer();
     await fastify.listen({ port: config.PORT, host: '0.0.0.0' });
