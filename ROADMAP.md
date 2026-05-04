@@ -2,127 +2,33 @@
 
 Spotify AI Organizer development roadmap. Dates are **targets**, not guarantees. Community can contribute to accelerate timelines.
 
-## v0.1.0 — Foundation (Week 1–2) 🚧 IN PROGRESS
+## v0.1.0 — Foundation ✅ DONE
 
-### Core
-- ✅ Monorepo setup (pnpm workspaces + Turborepo)
-- ✅ Docker Compose (PostgreSQL 16, Redis 7)
-- ✅ Prisma schema (User, Track, Classification, ClassificationRun, PlaylistProposal)
-- ✅ TypeScript configuration (root + per-package)
-- ✅ ESLint, Prettier setup
-- ✅ GitHub Actions CI/CD templates
-- ✅ Issue templates (bug, feature, prompt)
-
-### Spotify Integration
-- 🚧 OAuth 2.0 flow (authorization, token refresh)
-- 🚧 Fetch liked songs endpoint
-- 🚧 Audio features enrichment
-- 🚧 Rate limit handling
-
-### Documentation
-- ✅ README.md
-- ✅ CONTRIBUTING.md
-- ✅ .env.example
-- 🚧 Setup guide
-- 🚧 API specification
-
-### Testing Infrastructure
-- 🚧 Vitest setup
-- 🚧 Test utilities and fixtures
-- 🚧 Database test setup
+- Monorepo (pnpm workspaces + Turborepo), Docker Compose (PostgreSQL 16, Redis 7)
+- Prisma schema: User, Track, Classification, ClassificationRun, PlaylistProposal
+- Spotify OAuth PKCE flow — Next.js API routes (`/api/auth/login`, `/api/auth/callback`)
+- Fastify JWT auth with token refresh, user upsert
+- ESLint, Prettier, TypeScript strict mode, GitHub Actions CI templates
 
 ---
 
-## v0.2.0 — Classification Engine (Week 3–4)
+## v0.2.0 — Classification Engine ✅ DONE
 
-### LLM Integration
-- [ ] LLM abstraction layer interface
-- [ ] Claude provider implementation
-- [ ] OpenAI provider implementation
-- [ ] Gemini provider implementation (optional)
-- [ ] Ollama provider for local models
-
-### Classification Service
-- [ ] Batch processing (25 tracks per call)
-- [ ] Retry logic with exponential backoff
-- [ ] Parallel batch execution (up to 5 concurrent)
-- [ ] Confidence scoring (0–1 per classification)
-
-### BullMQ Job Processing
-- [ ] Job queue setup
-- [ ] Classification job processor
-- [ ] Job persistence and retry
-- [ ] Progress tracking
-
-### Prompts
-- [ ] System prompt v1.0 (versioning)
-- [ ] User prompt v1.0 (batching template)
-- [ ] Classification result formatting (strict JSON)
-- [ ] Prompt versioning system
-
-### CLI Tools
-- [ ] `pnpm classify:test` command
-- [ ] Classification eval suite
-- [ ] Sample track fixtures
-- [ ] Results visualization
-
-### Testing
-- [ ] LLM provider tests (mocked)
-- [ ] Classification logic tests
-- [ ] Job queue tests
-- [ ] E2E classification flow
+- Full Spotify liked-songs sync: paginated streaming → PostgreSQL upsert
+- LLM classification via Anthropic SDK — genres, moods, language, occasions, era, energy
+- Batch processing (25 tracks/call), background `void asyncFn()` pattern
+- `GET /api/library/stats`, `POST /api/library/sync`, `POST /api/classify/run`, `GET /api/classify/:runId`
+- Dashboard UI: sync card + classify card with live progress bars, polling
 
 ---
 
-## v0.3.0 — Review Dashboard (Week 5–7)
+## v0.3.0 — Review Dashboard ✅ DONE
 
-### Frontend (Next.js)
-- [ ] App Router setup
-- [ ] Auth context (Spotify OAuth)
-- [ ] Login/callback pages
-- [ ] Dashboard layout
-
-### Classification Results UI
-- [ ] Proposed playlists grid view
-- [ ] Track list per playlist (expandable)
-- [ ] Classification details (genre, mood, language, etc.)
-- [ ] Confidence badges and warnings
-- [ ] Taxonomy dimension switcher
-
-### Editing Features
-- [ ] Drag-and-drop tracks between playlists
-- [ ] Rename playlists inline
-- [ ] Delete playlist
-- [ ] Remove track from playlist
-- [ ] Merge playlists
-- [ ] Batch edit modal
-
-### Approval Flow
-- [ ] Checkbox select which playlists to create
-- [ ] Visibility selector (public/private)
-- [ ] Name prefix input (e.g., "AI: ")
-- [ ] Description auto-generation toggle
-- [ ] Confirmation modal
-- [ ] Progress bar during creation
-- [ ] Success screen with Spotify links
-
-### API Implementation
-- [ ] GET `/classify/run/:runId/results`
-- [ ] PATCH `/classify/run/:runId/results` (edits)
-- [ ] POST `/classify/run/:runId/approve` (create playlists)
-- [ ] GET `/classify/run/:runId/approve/status`
-
-### Spotify Playlist Creation
-- [ ] Create playlists via Spotify API
-- [ ] Handle mixed public/private batches
-- [ ] Track duplication check
-- [ ] Retry logic for failures
-
-### Testing
-- [ ] Frontend component tests
-- [ ] API route tests
-- [ ] E2E tests (Playwright)
-- [ ] Spotify API mock
+- `GET /api/classify/:runId/summary` — per-dimension aggregated counts
+- `GET /api/classify/:runId/tracks` — paginated track list with optional dimension/value filter
+- `POST /api/classify/:runId/approve` — generate `PlaylistProposal` records, mark run APPROVED
+- Review page (`/dashboard/review/[runId]`): 6-dimension sidebar, track panel with album art + full tags
+- Dashboard wired: "Review results →" link on classify card, live "Open review" card in action panel
 
 ---
 

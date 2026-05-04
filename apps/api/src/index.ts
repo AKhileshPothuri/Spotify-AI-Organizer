@@ -3,95 +3,425 @@ import fastifyJwt from '@fastify/jwt';
 import fastifyCors from '@fastify/cors';
 import { config } from './config/index.js';
 import prisma from './db.js';
+import { getValidToken, fetchLikedSongsCount } from './services/spotify.js';
+import { syncLibrary } from './services/library.js';
+import { classifyBatch } from './services/llm.js';
+
+interface JwtUser { userId: string; spotifyId: string }
 
 export async function createServer() {
-  const fastify = Fastify({
-    logger: {
-      level: config.LOG_LEVEL,
-    },
-  });
+  const fastify = Fastify({ logger: { level: config.LOG_LEVEL } });
 
   await fastify.register(fastifyCors, {
     origin: config.CORS_ORIGIN || '*',
     credentials: true,
   });
 
-  await fastify.register(fastifyJwt, {
-    secret: config.JWT_SECRET,
+  await fastify.register(fastifyJwt, { secret: config.JWT_SECRET });
+
+  // Auth guard reusable across routes
+  fastify.decorate('authenticate', async function (request: any, reply: any) {
+    try {
+      await request.jwtVerify();
+    } catch {
+      reply.status(401).send({ error: 'Unauthorized' });
+    }
   });
 
-  fastify.get('/health', async () => {
-    return { status: 'ok', timestamp: new Date().toISOString() };
-  });
+  // ─── Public ────────────────────────────────────────────────────────────────
 
-  fastify.get('/v1', async () => {
-    return {
-      version: '0.1.0',
-      name: 'Spotify AI Organizer API',
-      docs: 'https://docs.spotifyorganizer.dev',
-    };
-  });
+  fastify.get('/health', async () => ({ status: 'ok', timestamp: new Date().toISOString() }));
 
-  // Called by the Next.js callback route (server-to-server).
-  // Receives Spotify tokens, upserts the user in the DB, returns a signed app JWT.
-  fastify.post<{
-    Body: { accessToken: string; refreshToken: string; expiresIn: number };
-  }>('/api/auth/token', async (request, reply) => {
-    const { accessToken, refreshToken, expiresIn } = request.body;
+  fastify.get('/v1', async () => ({
+    version: '0.2.0',
+    name: 'Spotify AI Organizer API',
+  }));
 
-    const profileRes = await fetch('https://api.spotify.com/v1/me', {
-      headers: { Authorization: `Bearer ${accessToken}` },
-    });
+  // Called server-to-server by Next.js callback route
+  fastify.post<{ Body: { accessToken: string; refreshToken: string; expiresIn: number } }>(
+    '/api/auth/token',
+    async (request, reply) => {
+      const { accessToken, refreshToken, expiresIn } = request.body;
 
-    if (!profileRes.ok) {
-      return reply.status(400).send({ error: 'Invalid Spotify access token' });
+      const profileRes = await fetch('https://api.spotify.com/v1/me', {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+      if (!profileRes.ok) return reply.status(400).send({ error: 'Invalid Spotify token' });
+
+      const profile = await profileRes.json() as { id: string; email?: string; display_name?: string };
+
+      const user = await prisma.user.upsert({
+        where: { spotifyId: profile.id },
+        update: {
+          accessToken,
+          refreshToken,
+          expiresAt: Math.floor(Date.now() / 1000) + expiresIn,
+          spotifyDisplayName: profile.display_name,
+        },
+        create: {
+          spotifyId: profile.id,
+          email: profile.email,
+          spotifyUsername: profile.id,
+          spotifyDisplayName: profile.display_name,
+          accessToken,
+          refreshToken,
+          expiresAt: Math.floor(Date.now() / 1000) + expiresIn,
+        },
+      });
+
+      const token = fastify.jwt.sign(
+        { userId: user.id, spotifyId: user.spotifyId, displayName: user.spotifyDisplayName },
+        { expiresIn: config.JWT_EXPIRES_IN },
+      );
+      return { token };
+    },
+  );
+
+  // ─── Protected ─────────────────────────────────────────────────────────────
+
+  const auth = { preHandler: [(fastify as any).authenticate] };
+
+  // GET /api/library/stats
+  // Returns track count from DB + Spotify's live total
+  fastify.get('/api/library/stats', auth, async (request) => {
+    const { userId } = (request as any).user as JwtUser;
+
+    const [trackCount, runCount, playlistCount, latestRun] = await Promise.all([
+      prisma.track.count({ where: { userId } }),
+      prisma.classificationRun.count({ where: { userId, status: 'DONE' } }),
+      prisma.playlistProposal.count({
+        where: { userId, spotifyPlaylistId: { not: null } },
+      }),
+      prisma.classificationRun.findFirst({
+        where: { userId },
+        orderBy: { createdAt: 'desc' },
+        select: { id: true, status: true, processedTracks: true, totalTracks: true },
+      }),
+    ]);
+
+    // Live Spotify total (fast — only fetches 1 item)
+    let spotifyTotal: number | null = null;
+    try {
+      const token = await getValidToken(userId);
+      spotifyTotal = await fetchLikedSongsCount(token);
+    } catch {
+      // Non-fatal — DB count still returned
     }
 
-    const profile = (await profileRes.json()) as {
-      id: string;
-      email?: string;
-      display_name?: string;
-    };
+    return { trackCount, spotifyTotal, runCount, playlistCount, latestRun };
+  });
 
-    const expiresAt = Math.floor(Date.now() / 1000) + expiresIn;
+  // POST /api/library/sync
+  // Kicks off a background sync; returns 202 immediately
+  fastify.post('/api/library/sync', auth, async (request, reply) => {
+    const { userId } = (request as any).user as JwtUser;
 
-    const user = await prisma.user.upsert({
-      where: { spotifyId: profile.id },
-      update: {
-        accessToken,
-        refreshToken,
-        expiresAt,
-        spotifyDisplayName: profile.display_name,
-      },
-      create: {
-        spotifyId: profile.id,
-        email: profile.email,
-        spotifyUsername: profile.id,
-        spotifyDisplayName: profile.display_name,
-        accessToken,
-        refreshToken,
-        expiresAt,
-      },
-    });
-
-    const token = fastify.jwt.sign(
-      { userId: user.id, spotifyId: user.spotifyId, displayName: user.spotifyDisplayName },
-      { expiresIn: config.JWT_EXPIRES_IN },
+    void syncLibrary(userId).catch(err =>
+      fastify.log.error({ err }, 'Library sync failed'),
     );
 
-    return { token };
+    return reply.status(202).send({ status: 'started' });
   });
+
+  // GET /api/library/sync/status
+  // Quick poll — returns current track count in DB
+  fastify.get('/api/library/sync/status', auth, async (request) => {
+    const { userId } = (request as any).user as JwtUser;
+    const trackCount = await prisma.track.count({ where: { userId } });
+    return { trackCount };
+  });
+
+  // POST /api/classify/run
+  // Creates a ClassificationRun and processes all tracks in the background
+  fastify.post<{ Body?: { scope?: string } }>(
+    '/api/classify/run',
+    auth,
+    async (request, reply) => {
+      const { userId } = (request as any).user as JwtUser;
+      const scope = request.body?.scope ?? 'unclassified';
+
+      const trackCount = await prisma.track.count({ where: { userId } });
+      if (trackCount === 0) {
+        return reply.status(400).send({ error: 'No tracks found — sync your library first.' });
+      }
+
+      const run = await prisma.classificationRun.create({
+        data: {
+          userId,
+          scope,
+          status: 'PENDING',
+          totalTracks: trackCount,
+          llmProvider: config.LLM_PROVIDER,
+          activeDimensions: ['genre', 'mood', 'language', 'occasion', 'era', 'energyLevel'],
+        },
+      });
+
+      void runClassification(userId, run.id, fastify.log).catch(err =>
+        fastify.log.error({ err, runId: run.id }, 'Classification run failed'),
+      );
+
+      return reply.status(202).send({ runId: run.id, status: 'PENDING' });
+    },
+  );
+
+  // GET /api/classify/:runId
+  // Returns current status + progress
+  fastify.get<{ Params: { runId: string } }>(
+    '/api/classify/:runId',
+    auth,
+    async (request, reply) => {
+      const { userId } = (request as any).user as JwtUser;
+      const run = await prisma.classificationRun.findFirst({
+        where: { id: request.params.runId, userId },
+      });
+      if (!run) return reply.status(404).send({ error: 'Run not found' });
+      return run;
+    },
+  );
+
+  // GET /api/classify/:runId/summary
+  // Aggregated counts per dimension value (for review dashboard sidebar)
+  fastify.get<{ Params: { runId: string } }>(
+    '/api/classify/:runId/summary',
+    auth,
+    async (request, reply) => {
+      const { userId } = (request as any).user as JwtUser;
+      const run = await prisma.classificationRun.findFirst({
+        where: { id: request.params.runId, userId },
+      });
+      if (!run) return reply.status(404).send({ error: 'Run not found' });
+
+      const all = await prisma.classification.findMany({
+        where: { runId: request.params.runId, userId },
+        select: { genres: true, moods: true, language: true, occasions: true, era: true, energyLevel: true },
+      });
+
+      const tally = (map: Map<string, number>, values: string[]) => {
+        for (const v of values) if (v) map.set(v, (map.get(v) ?? 0) + 1);
+      };
+
+      const genreMap = new Map<string, number>();
+      const moodMap  = new Map<string, number>();
+      const langMap  = new Map<string, number>();
+      const occMap   = new Map<string, number>();
+      const eraMap   = new Map<string, number>();
+      const energyMap = new Map<string, number>();
+
+      for (const c of all) {
+        tally(genreMap, c.genres);
+        tally(moodMap, c.moods);
+        if (c.language) tally(langMap, [c.language]);
+        tally(occMap, c.occasions);
+        if (c.era) tally(eraMap, [c.era]);
+        if (c.energyLevel) tally(energyMap, [c.energyLevel]);
+      }
+
+      const sorted = (m: Map<string, number>) =>
+        [...m.entries()].sort((a, b) => b[1] - a[1]).map(([value, count]) => ({ value, count }));
+
+      return {
+        genre: sorted(genreMap),
+        mood: sorted(moodMap),
+        language: sorted(langMap),
+        occasion: sorted(occMap),
+        era: sorted(eraMap),
+        energyLevel: sorted(energyMap),
+      };
+    },
+  );
+
+  // GET /api/classify/:runId/tracks?dimension=genre&value=Pop&page=1&limit=100
+  // Paginated classified tracks with optional dimension filter
+  fastify.get<{
+    Params: { runId: string };
+    Querystring: { dimension?: string; value?: string; page?: string; limit?: string };
+  }>(
+    '/api/classify/:runId/tracks',
+    auth,
+    async (request, reply) => {
+      const { userId } = (request as any).user as JwtUser;
+      const { runId } = request.params;
+      const { dimension, value, page = '1', limit = '100' } = request.query;
+
+      const run = await prisma.classificationRun.findFirst({ where: { id: runId, userId } });
+      if (!run) return reply.status(404).send({ error: 'Run not found' });
+
+      const where: Record<string, unknown> = { runId, userId };
+      if (dimension && value) {
+        if      (dimension === 'genre')       where.genres = { has: value };
+        else if (dimension === 'mood')        where.moods = { has: value };
+        else if (dimension === 'language')    where.language = value;
+        else if (dimension === 'occasion')    where.occasions = { has: value };
+        else if (dimension === 'era')         where.era = value;
+        else if (dimension === 'energyLevel') where.energyLevel = value;
+      }
+
+      const skip = (parseInt(page) - 1) * parseInt(limit);
+      const take = parseInt(limit);
+
+      const [items, total] = await Promise.all([
+        prisma.classification.findMany({
+          where,
+          include: {
+            track: {
+              select: { name: true, artist: true, album: true, imageUrl: true, spotifyUrl: true, releaseYear: true },
+            },
+          },
+          skip,
+          take,
+          orderBy: { track: { name: 'asc' } },
+        }),
+        prisma.classification.count({ where }),
+      ]);
+
+      return { items, total, page: parseInt(page), limit: take };
+    },
+  );
+
+  // POST /api/classify/:runId/approve
+  // Groups classifications into PlaylistProposal records and marks run APPROVED
+  fastify.post<{ Params: { runId: string } }>(
+    '/api/classify/:runId/approve',
+    auth,
+    async (request, reply) => {
+      const { userId } = (request as any).user as JwtUser;
+      const { runId } = request.params;
+
+      const run = await prisma.classificationRun.findFirst({ where: { id: runId, userId } });
+      if (!run) return reply.status(404).send({ error: 'Run not found' });
+      if (run.status !== 'AWAITING_APPROVAL') {
+        return reply.status(400).send({ error: `Run is ${run.status}, expected AWAITING_APPROVAL` });
+      }
+
+      const all = await prisma.classification.findMany({
+        where: { runId, userId },
+        select: { trackId: true, genres: true, moods: true, language: true, occasions: true, era: true, energyLevel: true },
+      });
+
+      const groupMap = new Map<string, { dimension: string; value: string; trackIds: string[] }>();
+
+      const addToGroup = (dimension: string, value: string, trackId: string) => {
+        const key = `${dimension}::${value}`;
+        if (!groupMap.has(key)) groupMap.set(key, { dimension, value, trackIds: [] });
+        groupMap.get(key)!.trackIds.push(trackId);
+      };
+
+      for (const c of all) {
+        for (const g of c.genres) addToGroup('genre', g, c.trackId);
+        for (const m of c.moods)  addToGroup('mood', m, c.trackId);
+        if (c.language && c.language !== 'Unknown' && c.language !== 'Instrumental') {
+          addToGroup('language', c.language, c.trackId);
+        }
+        for (const o of c.occasions) addToGroup('occasion', o, c.trackId);
+        if (c.era)         addToGroup('era', c.era, c.trackId);
+        if (c.energyLevel) addToGroup('energyLevel', c.energyLevel, c.trackId);
+      }
+
+      const proposals = [...groupMap.values()].filter(g => g.trackIds.length >= 3);
+
+      await prisma.playlistProposal.deleteMany({ where: { runId } });
+      await prisma.playlistProposal.createMany({
+        data: proposals.map(g => ({
+          userId,
+          runId,
+          name: g.value,
+          description: `AI-curated ${g.dimension} playlist: ${g.value}`,
+          dimension: g.dimension,
+          taxonomyValue: g.value,
+          trackIds: g.trackIds,
+          trackCount: g.trackIds.length,
+        })),
+      });
+      await prisma.classificationRun.update({
+        where: { id: runId },
+        data: { status: 'APPROVED', approvedAt: new Date() },
+      });
+
+      return { status: 'APPROVED', proposalCount: proposals.length };
+    },
+  );
 
   return fastify;
 }
 
+// ─── Background classification worker ────────────────────────────────────────
+
+async function runClassification(
+  userId: string,
+  runId: string,
+  log: any,
+) {
+  const BATCH = config.BATCH_SIZE;
+
+  await prisma.classificationRun.update({
+    where: { id: runId },
+    data: { status: 'CLASSIFYING', startedAt: new Date() },
+  });
+
+  const tracks = await prisma.track.findMany({
+    where: { userId },
+    select: { id: true, name: true, artist: true, album: true, releaseYear: true },
+  });
+
+  let processed = 0;
+
+  for (let i = 0; i < tracks.length; i += BATCH) {
+    const batch = tracks.slice(i, i + BATCH);
+
+    try {
+      const results = await classifyBatch(batch);
+
+      await Promise.all(
+        results.map(c =>
+          prisma.classification.upsert({
+            where: { trackId_runId: { trackId: c.trackId, runId } },
+            update: {
+              genres: c.genres,
+              moods: c.moods,
+              language: c.language,
+              occasions: c.occasions,
+              era: c.era,
+              energyLevel: c.energyLevel,
+            },
+            create: {
+              userId,
+              trackId: c.trackId,
+              runId,
+              genres: c.genres,
+              moods: c.moods,
+              language: c.language,
+              occasions: c.occasions,
+              era: c.era,
+              energyLevel: c.energyLevel,
+              llmModel: 'claude-sonnet-4-6',
+            },
+          }),
+        ),
+      );
+
+      processed += batch.length;
+      await prisma.classificationRun.update({
+        where: { id: runId },
+        data: { processedTracks: processed },
+      });
+    } catch (err) {
+      log.error({ err, batchStart: i }, 'Batch classification error');
+    }
+  }
+
+  await prisma.classificationRun.update({
+    where: { id: runId },
+    data: { status: 'AWAITING_APPROVAL', completedAt: new Date(), processedTracks: processed },
+  });
+}
+
+// ─── Start ───────────────────────────────────────────────────────────────────
+
 export async function start() {
   try {
     const fastify = await createServer();
-
     await fastify.listen({ port: config.PORT, host: '0.0.0.0' });
-
-    console.log(`🚀 Server running at http://0.0.0.0:${config.PORT}`);
+    console.log(`🚀 API running at http://0.0.0.0:${config.PORT}`);
   } catch (err) {
     console.error('Failed to start server:', err);
     process.exit(1);

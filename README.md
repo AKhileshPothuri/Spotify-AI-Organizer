@@ -58,52 +58,68 @@ git clone https://github.com/akhileshpothuri/spotify-ai-organizer.git
 cd spotify-ai-organizer
 pnpm install
 
-# Configure root env (API + shared vars)
+# Configure root env (Fastify API)
 cp .env.example .env
-vim .env   # add Spotify Client ID/Secret, LLM API key, etc.
+# Edit .env — add your Spotify Client ID/Secret and LLM API key
 
-# Configure Next.js env (frontend API routes need their own .env.local)
+# Configure Next.js env (Next.js only loads .env from its own directory)
 cp .env.example apps/web/.env.local
-vim apps/web/.env.local  # same values — Next.js only reads its own directory
+# Edit apps/web/.env.local — same values as .env
 
-# Spotify OAuth requires HTTPS for the redirect URI.
-# For local dev, start a tunnel and register the HTTPS URL in your Spotify app:
-npx localtunnel --port 3000   # → https://xxxx.loca.lt/api/auth/callback
-# Then set SPOTIFY_REDIRECT_URI=https://xxxx.loca.lt/api/auth/callback in both .env files
+# Spotify OAuth redirect URI setup:
+# Spotify's API accepts http://127.0.0.1 for local dev — no HTTPS tunnel needed.
+# In your Spotify app dashboard (developer.spotify.com), add this exact redirect URI:
+#   http://127.0.0.1:3000/api/auth/callback
+# Make sure both .env files have: SPOTIFY_REDIRECT_URI=http://127.0.0.1:3000/api/auth/callback
 
-# Start services
+# Start infrastructure
 pnpm docker:up                              # PostgreSQL + Redis
-pnpm --filter @spotify-organizer/api db:generate && \
-pnpm --filter @spotify-organizer/api db:migrate   # Database setup
-pnpm dev                                    # Start dev servers
+
+# Run database migrations
+pnpm --filter @spotify-organizer/api db:generate
+pnpm --filter @spotify-organizer/api db:migrate
+
+# Start dev servers
+pnpm dev
 ```
 
-**Frontend:** http://localhost:3000  
+**Frontend:** http://127.0.0.1:3000  
 **API:** http://localhost:3001
+
+> **Tip:** Use `http://127.0.0.1:3000` (not `localhost`) in your browser — Spotify redirects back to the exact origin it received, and the cookie used for PKCE requires origin consistency.
 
 ### First Classification
 
-1. Open http://localhost:3000
-2. Click "Login with Spotify" to authorize
-3. Go to **Classify** → Click "Start Classification"
-4. Wait for LLM to analyze your liked songs
-5. Review proposed playlists in the dashboard
-6. **Edit** tracks, merge playlists, rename as needed
-7. **Click "Approve"** to create Spotify playlists
+1. Open `http://127.0.0.1:3000` and click **Login with Spotify**
+2. On the Dashboard, click **Sync Now** — imports all your liked songs
+3. Once synced, click **Start Classification** — Claude analyzes every track
+4. When the run completes, click **Review results →**
+5. Browse classifications by Genre, Mood, Language, Era, Energy, Occasion
+6. Click **Approve All** to generate playlist proposals
+7. Playlist creation from proposals coming in v0.4
 
 ## Features
 
-### ✅ v0.1.0 (Foundation - Done)
-- Monorepo setup (pnpm + Turborepo)
-- Docker Compose (Postgres + Redis)
-- Spotify OAuth (PKCE, Next.js API routes, Fastify user upsert, JWT)
-- Database schema (User, Track, Classification, PlaylistProposal models)
+### ✅ v0.1.0 — Foundation
+- Monorepo (pnpm + Turborepo), Docker Compose (Postgres + Redis)
+- Spotify OAuth PKCE — Next.js API routes, Fastify JWT, token refresh
+- Database schema: User, Track, Classification, ClassificationRun, PlaylistProposal
 
-### 🚧 v0.2.0–v0.4.0 (In Development)
-- LLM classification engine
-- Review dashboard UI
-- Playlist creation
-- Auto-sync & custom config
+### ✅ v0.2.0 — Classification Engine
+- Full Spotify liked-songs sync to PostgreSQL (paginated streaming, upsert)
+- LLM classification via Claude — genre, mood, language, occasion, era, energy level
+- Background processing with live progress polling (no infrastructure dependency)
+- Dashboard with Sync + Classify cards and real-time progress bars
+
+### ✅ v0.3.0 — Review Dashboard
+- Classification review across 6 dimensions (Genre, Mood, Language, Era, Energy, Occasion)
+- Track browser with album art, full tag set, and Spotify deep links per track
+- One-click **Approve All** — groups classifications into `PlaylistProposal` DB records
+
+### 🚧 v0.4.0 — Playlist Creation (Next)
+- Push approved proposals to Spotify as real playlists (one click)
+- Auto-sync newly liked songs on a schedule
+- User config: custom taxonomy, LLM provider selection
 
 ### 📋 v1.0.0 (Production Launch)
 - Full E2E testing
@@ -143,11 +159,11 @@ LLM Provider: Claude / OpenAI / Gemini / Ollama
 
 | Layer | Technology | Why |
 |-------|-----------|-----|
-| **Frontend** | Next.js 14, TypeScript, shadcn/ui | SSR, great DX, accessible |
+| **Frontend** | Next.js 14, TypeScript, Tailwind CSS | App Router, server-side auth |
 | **Backend** | Fastify, PostgreSQL, Prisma | Fast, type-safe, relational |
-| **Jobs** | BullMQ + Redis | Reliable async classification |
-| **LLM** | Claude (default), swappable | Deep multilingual support |
-| **Monorepo** | pnpm + Turborepo | Fast builds, shared types |
+| **Background jobs** | `void asyncFn()` + polling (BullMQ in v0.4) | No infra overhead for current scale |
+| **LLM** | Claude (default), swappable | Deep multilingual + cultural classification |
+| **Monorepo** | pnpm workspaces + Turborepo | Fast installs, shared types |
 
 ## Configuration
 
@@ -155,21 +171,24 @@ LLM Provider: Claude / OpenAI / Gemini / Ollama
 
 ```bash
 # Spotify OAuth (from developer.spotify.com)
-SPOTIFY_CLIENT_ID=...
-SPOTIFY_CLIENT_SECRET=...
-SPOTIFY_REDIRECT_URI=http://localhost:3000/api/auth/callback
+SPOTIFY_CLIENT_ID=your_client_id
+SPOTIFY_CLIENT_SECRET=your_client_secret
+SPOTIFY_REDIRECT_URI=http://127.0.0.1:3000/api/auth/callback  # use 127.0.0.1, not localhost
 
 # LLM (pick one)
 LLM_PROVIDER=claude                  # claude | openai | gemini | ollama
-ANTHROPIC_API_KEY=sk-ant-...
+ANTHROPIC_API_KEY=sk-ant-your_key_here
 
 # Database (auto via Docker)
 DATABASE_URL=postgresql://postgres:postgres@localhost:5432/spotify_organizer
 REDIS_URL=redis://localhost:6379
 
-# JWT & Auth
-JWT_SECRET=your-secret-here
+# JWT
+JWT_SECRET=run-openssl-rand-base64-32-to-generate-this
 JWT_EXPIRES_IN=7d
+
+# URLs
+NEXT_PUBLIC_API_URL=http://localhost:3001
 ```
 
 See [.env.example](.env.example) for all options.
@@ -191,33 +210,23 @@ The Fastify API exposes one auth endpoint (called server-to-server by Next.js):
 POST /api/auth/token                 # Receives Spotify tokens, upserts user, returns app JWT
 ```
 
-### Classification
-
-```bash
-# Start classification
-POST /classify/run
-Body: { scope: "unclassified", llmProvider: "claude" }
-
-# Get results
-GET /classify/run/:runId/results
-
-# Edit before approval
-PATCH /classify/run/:runId/results
-
-# Approve & create playlists
-POST /classify/run/:runId/approve
-Body: { playlistIds: [...], visibility: "private" }
-```
-
 ### Library
 
 ```bash
-GET /library/stats
-POST /library/fetch                  # Fetch liked songs
-GET /library/fetch/:jobId/status
+GET  /api/library/stats              # Track count (DB + live Spotify total), run count, playlist count
+POST /api/library/sync               # Import all liked songs from Spotify → DB (background, 202)
+GET  /api/library/sync/status        # Poll DB track count during a sync
 ```
 
-See [docs/API.md](./docs/API.md) for full specification.
+### Classification
+
+```bash
+POST /api/classify/run               # Start a classification run (background, 202) → { runId }
+GET  /api/classify/:runId            # Poll run status + progress
+GET  /api/classify/:runId/summary    # Aggregated counts per dimension (for review sidebar)
+GET  /api/classify/:runId/tracks     # Paginated tracks; filter by ?dimension=genre&value=Pop
+POST /api/classify/:runId/approve    # Generate PlaylistProposal records, mark run APPROVED
+```
 
 ## Development
 
@@ -238,22 +247,28 @@ pnpm docker:down      # Stop services
 
 ```
 ├── apps/
-│   ├── web/              # Next.js 14 frontend
-│   │   ├── app/          # App Router
-│   │   ├── components/   # React components
-│   │   └── lib/          # Client utilities
-│   └── api/              # Fastify backend
+│   ├── web/                          # Next.js 14 frontend
+│   │   └── src/app/
+│   │       ├── api/auth/             # OAuth routes (login, callback) — PKCE, server-side
+│   │       ├── dashboard/            # Main app UI (sync, classify, stats)
+│   │       │   └── review/[runId]/   # Classification review page
+│   │       ├── page.tsx              # Landing page
+│   │       └── layout.tsx
+│   └── api/                          # Fastify backend
 │       ├── src/
-│       │   ├── routes/   # REST endpoints
-│       │   ├── services/ # Business logic
-│       │   ├── jobs/     # BullMQ processors
-│       │   └── db/       # Prisma schema
-│       └── prompts/      # LLM prompt templates
+│       │   ├── config/index.ts       # Zod-validated env config
+│       │   ├── db.ts                 # Prisma client singleton
+│       │   ├── index.ts              # All routes + background workers
+│       │   └── services/
+│       │       ├── spotify.ts        # Token refresh, liked-songs streaming
+│       │       ├── library.ts        # syncLibrary() — upserts tracks to DB
+│       │       └── llm.ts            # classifyBatch() — Anthropic SDK
+│       └── prisma/
+│           └── schema.prisma         # DB schema
 ├── packages/
-│   ├── types/            # Shared TypeScript types
-│   └── config/           # Shared configuration
-├── infra/                # Docker, K8s manifests
-└── docs/                 # Documentation
+│   └── types/                        # Shared TypeScript types
+├── docker-compose.yml                # PostgreSQL + Redis
+└── .env.example                      # Annotated env template
 ```
 
 ### Contributing

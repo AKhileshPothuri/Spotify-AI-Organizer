@@ -30,7 +30,7 @@ export function GET() {
   // Store verifier in httpOnly cookie so the callback route can finish the exchange
   response.cookies.set('pkce_verifier', verifier, {
     httpOnly: true,
-    secure: true,
+    secure: process.env.NODE_ENV === 'production',
     sameSite: 'lax',
     maxAge: 600, // 10 minutes — long enough to complete the login
     path: '/',

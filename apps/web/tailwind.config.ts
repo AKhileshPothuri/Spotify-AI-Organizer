@@ -9,7 +9,21 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
-        spotify: '#1DB954',
+        // Spotify design tokens
+        spotify: {
+          green:   '#1DB954',
+          'green-bright': '#1ed760',
+          black:   '#121212',
+          surface: '#181818',
+          elevated:'#282828',
+          highlight:'#3E3E3E',
+          'text-base':   '#FFFFFF',
+          'text-subdued':'#B3B3B3',
+          'text-muted':  '#6A6A6A',
+        },
+      },
+      borderRadius: {
+        card: '8px',
       },
     },
   },
