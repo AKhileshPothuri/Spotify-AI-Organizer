@@ -57,7 +57,7 @@ export async function classifyBatch(tracks: TrackInput[]): Promise<Classificatio
   try {
     // Strip any accidental markdown fences
     const clean = raw.replace(/```(?:json)?/g, '').trim();
-    parsed = JSON.parse(clean);
+    parsed = JSON.parse(clean) as Omit<Classification, 'trackId'>[];
   } catch {
     throw new Error(`LLM returned invalid JSON: ${raw.slice(0, 200)}`);
   }
