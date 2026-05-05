@@ -40,6 +40,12 @@ Spotify's "Liked Songs" library becomes an overwhelming, unnavigable dump with h
 | **Energy** | Low, Medium, High | Spotify audio features |
 | **Custom Tags** | User-defined (Rainy Day, Gym, Date Night) | User config |
 
+## Screenshots
+
+![Dashboard — sync, classify, and track progress](assets/dashboard.png)
+
+![Review panel — browse, edit, and approve classifications before anything hits Spotify](assets/review_panel.png)
+
 ## Quick Start
 
 ### Prerequisites
@@ -96,7 +102,7 @@ pnpm dev
 4. When the run completes, click **Review results →**
 5. Browse classifications by Genre, Mood, Language, Era, Energy, Occasion
 6. Click **Approve All** to generate playlist proposals
-7. Playlist creation from proposals coming in v0.4
+7. Rename any playlist, then click **Push to Spotify**
 
 ## Features
 
@@ -116,10 +122,14 @@ pnpm dev
 - Track browser with album art, full tag set, and Spotify deep links per track
 - One-click **Approve All** — groups classifications into `PlaylistProposal` DB records
 
-### 🚧 v0.4.0 — Playlist Creation (Next)
-- Push approved proposals to Spotify as real playlists (one click)
-- Auto-sync newly liked songs on a schedule
-- User config: custom taxonomy, LLM provider selection
+### ✅ v0.4.0 — Playlist Creation
+- Push approved proposals to Spotify as real playlists with one click
+- Background worker with live progress polling; run status tracks `CREATING_PLAYLISTS → DONE`
+
+### ✅ v0.5.0 — Custom Taxonomy & Playlist Naming
+- **Settings page** — constrain Claude to your own genre, mood, occasion, language, era, and energy-level lists; leave a dimension blank to let Claude choose freely
+- **Inline renaming** — edit any playlist name after approval, before pushing to Spotify
+- `PATCH /api/classify/:runId/proposals/:proposalId` rename endpoint
 
 ### 📋 v1.0.0 (Production Launch)
 - Full E2E testing
@@ -292,10 +302,11 @@ We welcome contributions! See [CONTRIBUTING.md](./CONTRIBUTING.md) for:
 
 ## Roadmap
 
-- **v0.1.0** (Week 1–2) — Foundation & monorepo ✅ In Progress
-- **v0.2.0** (Week 3–4) — LLM classification engine
-- **v0.3.0** (Week 5–7) — Review dashboard & approval flow
-- **v0.4.0** (Week 8–9) — Auto-sync & user config
+- **v0.1.0** — Foundation & monorepo ✅
+- **v0.2.0** — LLM classification engine ✅
+- **v0.3.0** — Review dashboard & approval flow ✅
+- **v0.4.0** — Playlist creation (push to Spotify) ✅
+- **v0.5.0** — Custom taxonomy & playlist naming ✅
 - **v1.0.0** — Production launch with tests & performance
 - **v2.0+** — Apple Music, Ollama, multi-language UI
 
