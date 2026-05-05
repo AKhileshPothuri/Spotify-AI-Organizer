@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useCallback, useRef } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import {
   ArrowLeft, CheckCircle2, Loader2, Music2, Globe, Zap,
@@ -195,6 +195,49 @@ function TagAdder({ suggestions, existing, placeholder = 'Add…', onAdd }: {
   );
 }
 
+// ─── Proposal name card (inline rename) ──────────────────────────────────────
+
+function ProposalNameCard({
+  proposal,
+  dimMeta,
+  DimIcon,
+  onRename,
+}: {
+  proposal: PlaylistResult;
+  dimMeta: typeof DIMS[DimKey];
+  DimIcon: React.ElementType;
+  onRename: (id: string, name: string) => Promise<void>;
+}) {
+  const [draft, setDraft] = useState(proposal.name);
+
+  function commit() {
+    if (draft.trim() && draft.trim() !== proposal.name) {
+      void onRename(proposal.id, draft.trim());
+    } else {
+      setDraft(proposal.name);
+    }
+  }
+
+  return (
+    <div className="flex items-center gap-3 bg-spotify-surface rounded-xl px-4 py-3 group">
+      <div className={`w-10 h-10 ${dimMeta.panelBg} rounded-lg flex items-center justify-center flex-shrink-0`}>
+        <DimIcon className={`w-4 h-4 ${dimMeta.accent}`} />
+      </div>
+      <div className="flex-1 min-w-0">
+        <input
+          value={draft}
+          onChange={e => setDraft(e.target.value)}
+          onBlur={commit}
+          onKeyDown={e => { if (e.key === 'Enter') { e.currentTarget.blur(); } }}
+          className="w-full text-sm font-semibold bg-transparent text-white border-b border-transparent hover:border-white/20 focus:border-spotify-green outline-none truncate transition-colors pb-0.5"
+          title="Click to rename"
+        />
+        <p className="text-xs text-spotify-text-muted">{proposal.trackCount} tracks · {proposal.dimension}</p>
+      </div>
+    </div>
+  );
+}
+
 // ─── Main page ────────────────────────────────────────────────────────────────
 
 export default function ReviewPage() {
@@ -214,6 +257,7 @@ export default function ReviewPage() {
   const [playlists, setPlaylists]         = useState<PlaylistResult[]>([]);
   const [saveState, setSaveState]         = useState<'saved' | 'saving' | 'error'>('saved');
   const [changeCount, setChangeCount]     = useState(0);
+  const [nameSaveState, setNameSaveState] = useState<'idle' | 'saving' | 'saved'>('idle');
 
   // Refs to avoid stale closures in debounced save
   const groupTracksRef  = useRef<ClassifiedTrack[]>([]);
@@ -226,13 +270,13 @@ export default function ReviewPage() {
   useEffect(() => { activeDimRef.current    = activeDim;    }, [activeDim]);
   useEffect(() => { selectedGrpRef.current  = selectedGroup; }, [selectedGroup]);
 
-  // ── Load playlists helper ─────────────────────────────────────────────────
-  const loadPlaylists = useCallback(async () => {
+  // ── Load proposals helper (used after approve AND after done) ────────────
+  const loadProposals = useCallback(async () => {
     const res = await fetch(`${API}/api/classify/${runId}/playlists`, { headers: authH() });
     if (!res.ok) return;
-    const data = await res.json() as { proposals: PlaylistResult[] };
+    const data = await res.json() as { proposals: PlaylistResult[]; runStatus: string };
     setPlaylists(data.proposals);
-    setPushState('done');
+    if (data.runStatus === 'DONE') setPushState('done');
   }, [runId]);
 
   // ── Load run + summary ────────────────────────────────────────────────────
@@ -248,10 +292,10 @@ export default function ReviewPage() {
       if (runData.status === 'APPROVED' || runData.status === 'CREATING_PLAYLISTS' || runData.status === 'DONE') {
         setApproveState('done');
       }
-      if (runData.status === 'DONE') void loadPlaylists();
+      if (runData.status === 'APPROVED' || runData.status === 'DONE') void loadProposals();
       if (sumRes.ok) setSummary(await sumRes.json() as Summary);
     });
-  }, [runId, router, loadPlaylists]);
+  }, [runId, router, loadProposals]);
 
   // ── Poll while playlists are being created ────────────────────────────────
   useEffect(() => {
@@ -264,12 +308,12 @@ export default function ReviewPage() {
         setRun(data);
         if (data.status === 'DONE') {
           clearInterval(interval);
-          void loadPlaylists();
+          void loadProposals();
         }
       })();
     }, 2000);
     return () => clearInterval(interval);
-  }, [run?.status, runId, loadPlaylists]);
+  }, [run?.status, runId, loadProposals]);
 
   // ── Load tracks for selected group ───────────────────────────────────────
   useEffect(() => {
@@ -371,8 +415,29 @@ export default function ReviewPage() {
       setProposalCount(data.proposalCount);
       setApproveState('done');
       setRun(r => r ? { ...r, status: 'APPROVED' } : r);
+      void loadProposals();
     } else {
       setApproveState('idle');
+    }
+  }
+
+  async function patchProposalName(id: string, name: string) {
+    if (!name.trim()) return;
+    setNameSaveState('saving');
+    try {
+      const res = await fetch(`${API}/api/classify/${runId}/proposals/${id}`, {
+        method: 'PATCH',
+        headers: { ...authH(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: name.trim() }),
+      });
+      if (res.ok) {
+        const { name: saved } = await res.json() as { id: string; name: string };
+        setPlaylists(prev => prev.map(p => p.id === id ? { ...p, name: saved } : p));
+        setNameSaveState('saved');
+        setTimeout(() => setNameSaveState('idle'), 2000);
+      }
+    } catch {
+      setNameSaveState('idle');
     }
   }
 
@@ -475,10 +540,22 @@ export default function ReviewPage() {
           {/* Approved, not yet pushed */}
           {isApproved && !isPushing && !isDone && (
             <div className="flex items-center gap-3 flex-shrink-0">
-              <span className="hidden sm:flex items-center gap-1.5 text-spotify-green text-xs font-medium">
-                <CheckCircle2 className="w-3.5 h-3.5" />
-                {proposalCount ?? totalGroups} playlists ready
-              </span>
+              {nameSaveState === 'saving' && (
+                <span className="hidden sm:flex items-center gap-1 text-xs text-spotify-text-muted">
+                  <Loader2 className="w-3 h-3 animate-spin" /> Saving name…
+                </span>
+              )}
+              {nameSaveState === 'saved' && (
+                <span className="hidden sm:flex items-center gap-1 text-xs text-spotify-green">
+                  <CheckCircle2 className="w-3 h-3" /> Name saved
+                </span>
+              )}
+              {nameSaveState === 'idle' && (
+                <span className="hidden sm:flex items-center gap-1.5 text-spotify-green text-xs font-medium">
+                  <CheckCircle2 className="w-3.5 h-3.5" />
+                  {proposalCount ?? playlists.length} playlists ready
+                </span>
+              )}
               <button
                 onClick={() => { void handlePush(); }}
                 disabled={pushState === 'loading'}
@@ -568,7 +645,8 @@ export default function ReviewPage() {
         {/* ── Right: track panel ── */}
         <div className="flex-1 min-w-0 flex flex-col">
 
-          {!selectedGroup && !isDone && (
+          {/* Empty state — not approved yet */}
+          {!selectedGroup && !isDone && !isApproved && (
             <div className="flex-1 flex flex-col items-center justify-center text-center py-24">
               <div className={`w-16 h-16 ${panelBg} rounded-2xl flex items-center justify-center mb-4`}>
                 <Icon className={`w-7 h-7 ${accent}`} />
@@ -579,6 +657,41 @@ export default function ReviewPage() {
               <p className="text-xs text-spotify-text-muted max-w-xs leading-relaxed">
                 Browse and edit track classifications before approving. Hover a tag to remove it, click <strong>+</strong> to add, or click single-value tags to change them.
               </p>
+            </div>
+          )}
+
+          {/* Approved — name your playlists before pushing */}
+          {!selectedGroup && isApproved && !isPushing && !isDone && (
+            <div className="flex-1 overflow-y-auto">
+              <div className="mb-5">
+                <h2 className="font-bold text-base mb-0.5">Name Your Playlists</h2>
+                <p className="text-xs text-spotify-text-muted">
+                  {playlists.length > 0
+                    ? `${playlists.length} playlists ready · click any name to rename it, then push to Spotify`
+                    : 'Loading proposals…'}
+                </p>
+              </div>
+              {playlists.length === 0 && (
+                <div className="flex items-center gap-2 text-spotify-text-muted py-6">
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  <span className="text-sm">Loading…</span>
+                </div>
+              )}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {playlists.map(p => {
+                  const dimMeta = DIMS[p.dimension as DimKey] ?? DIMS.genre;
+                  const DimIcon = dimMeta.Icon;
+                  return (
+                    <ProposalNameCard
+                      key={p.id}
+                      proposal={p}
+                      dimMeta={dimMeta}
+                      DimIcon={DimIcon}
+                      onRename={patchProposalName}
+                    />
+                  );
+                })}
+              </div>
             </div>
           )}
 

@@ -16,7 +16,7 @@ import {
   addTracksToPlaylist,
 } from './services/spotify.js';
 import { syncLibrary } from './services/library.js';
-import { classifyBatch } from './services/llm.js';
+import { classifyBatch, type CustomTaxonomy } from './services/llm.js';
 
 // ─── Type augmentation ────────────────────────────────────────────────────────
 
@@ -60,7 +60,7 @@ export async function createServer(): Promise<FastifyInstance> {
   fastify.get('/health', () => ({ status: 'ok', timestamp: new Date().toISOString() }));
 
   fastify.get('/v1', () => ({
-    version: '0.2.0',
+    version: '0.5.0',
     name: 'Spotify AI Organizer API',
   }));
 
@@ -432,6 +432,61 @@ export async function createServer(): Promise<FastifyInstance> {
     },
   );
 
+  // GET /api/config
+  fastify.get('/api/config', auth, async (request) => {
+    const { userId } = request.user;
+    const cfg = await prisma.userConfig.findUnique({ where: { userId } });
+    return cfg ?? { customTaxonomy: null, activeDimensions: ['genre', 'mood', 'language', 'occasion', 'era', 'energyLevel'] };
+  });
+
+  // PUT /api/config
+  fastify.put<{ Body: { customTaxonomy?: unknown; activeDimensions?: string[] } }>(
+    '/api/config',
+    auth,
+    async (request) => {
+      const { userId } = request.user;
+      const { customTaxonomy, activeDimensions } = request.body;
+      const data: Record<string, unknown> = {};
+      if (customTaxonomy !== undefined) data.customTaxonomy = customTaxonomy;
+      if (activeDimensions !== undefined) data.activeDimensions = activeDimensions;
+
+      const cfg = await prisma.userConfig.upsert({
+        where: { userId },
+        update: data,
+        create: { userId, ...data },
+      });
+      return cfg;
+    },
+  );
+
+  // PATCH /api/classify/:runId/proposals/:proposalId
+  // Rename a playlist proposal before it's pushed to Spotify
+  fastify.patch<{ Params: { runId: string; proposalId: string }; Body: { name: string } }>(
+    '/api/classify/:runId/proposals/:proposalId',
+    auth,
+    async (request, reply) => {
+      const { userId } = request.user;
+      const { runId, proposalId } = request.params;
+      const { name } = request.body;
+
+      if (!name?.trim()) return reply.status(400).send({ error: 'name is required' });
+
+      const proposal = await prisma.playlistProposal.findFirst({
+        where: { id: proposalId, runId, userId },
+      });
+      if (!proposal) return reply.status(404).send({ error: 'Proposal not found' });
+      if (proposal.spotifyPlaylistId) {
+        return reply.status(400).send({ error: 'Playlist already pushed — rename it directly on Spotify.' });
+      }
+
+      const updated = await prisma.playlistProposal.update({
+        where: { id: proposalId },
+        data: { name: name.trim() },
+      });
+      return { id: updated.id, name: updated.name };
+    },
+  );
+
   // GET /api/classify/:runId/playlists
   // Returns all playlist proposals for a run with their Spotify URLs (if created)
   fastify.get<{ Params: { runId: string } }>(
@@ -525,10 +580,15 @@ async function runClassification(
     data: { status: 'CLASSIFYING', startedAt: new Date() },
   });
 
-  const tracks = await prisma.track.findMany({
-    where: { userId },
-    select: { id: true, name: true, artist: true, album: true, releaseYear: true },
-  });
+  const [tracks, userCfg] = await Promise.all([
+    prisma.track.findMany({
+      where: { userId },
+      select: { id: true, name: true, artist: true, album: true, releaseYear: true },
+    }),
+    prisma.userConfig.findUnique({ where: { userId }, select: { customTaxonomy: true } }),
+  ]);
+
+  const taxonomy = userCfg?.customTaxonomy as CustomTaxonomy | null | undefined;
 
   let processed = 0;
 
@@ -536,7 +596,7 @@ async function runClassification(
     const batch = tracks.slice(i, i + BATCH);
 
     try {
-      const results = await classifyBatch(batch);
+      const results = await classifyBatch(batch, taxonomy ?? undefined);
 
       await Promise.all(
         results.map(c =>

@@ -19,7 +19,16 @@ export interface Classification {
   energyLevel: 'Low' | 'Medium' | 'High';
 }
 
-const SYSTEM_PROMPT = `You are a music classification expert. Given a list of tracks, classify each one.
+export interface CustomTaxonomy {
+  genres?: string[];
+  moods?: string[];
+  occasions?: string[];
+  languages?: string[];
+  eras?: string[];
+  energyLevels?: string[];
+}
+
+const BASE_SYSTEM_PROMPT = `You are a music classification expert. Given a list of tracks, classify each one.
 Return ONLY a valid JSON array — no explanation, no markdown, no code fences.
 Each element must follow this exact schema:
 {
@@ -32,6 +41,19 @@ Each element must follow this exact schema:
 }
 The array must have exactly as many elements as tracks given, in the same order.`;
 
+function buildSystemPrompt(taxonomy?: CustomTaxonomy): string {
+  if (!taxonomy) return BASE_SYSTEM_PROMPT;
+  const constraints: string[] = [];
+  if (taxonomy.genres?.length)       constraints.push(`genres: pick ONLY from [${taxonomy.genres.join(', ')}]`);
+  if (taxonomy.moods?.length)        constraints.push(`moods: pick ONLY from [${taxonomy.moods.join(', ')}]`);
+  if (taxonomy.occasions?.length)    constraints.push(`occasions: pick ONLY from [${taxonomy.occasions.join(', ')}]`);
+  if (taxonomy.languages?.length)    constraints.push(`language: pick ONLY from [${taxonomy.languages.join(', ')}]`);
+  if (taxonomy.eras?.length)         constraints.push(`era: pick ONLY from [${taxonomy.eras.join(', ')}]`);
+  if (taxonomy.energyLevels?.length) constraints.push(`energyLevel: pick ONLY from [${taxonomy.energyLevels.join(', ')}]`);
+  if (!constraints.length) return BASE_SYSTEM_PROMPT;
+  return `${BASE_SYSTEM_PROMPT}\n\nConstraints — strictly use ONLY these allowed values:\n${constraints.map(c => `- ${c}`).join('\n')}`;
+}
+
 function buildUserPrompt(tracks: TrackInput[]): string {
   const list = tracks
     .map((t, i) =>
@@ -43,11 +65,11 @@ function buildUserPrompt(tracks: TrackInput[]): string {
 
 const client = new Anthropic({ apiKey: config.ANTHROPIC_API_KEY });
 
-export async function classifyBatch(tracks: TrackInput[]): Promise<Classification[]> {
+export async function classifyBatch(tracks: TrackInput[], taxonomy?: CustomTaxonomy): Promise<Classification[]> {
   const response = await client.messages.create({
     model: 'claude-sonnet-4-6',
     max_tokens: 4096,
-    system: SYSTEM_PROMPT,
+    system: buildSystemPrompt(taxonomy),
     messages: [{ role: 'user', content: buildUserPrompt(tracks) }],
   });
 

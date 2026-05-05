@@ -5,7 +5,7 @@ import { useSearchParams, useRouter } from 'next/navigation';
 import {
   Brain, Eye, ListMusic, LogOut, RefreshCw,
   Library, Activity, Layers, Sparkles, ChevronRight,
-  CheckCircle2, Loader2, AlertCircle,
+  CheckCircle2, Loader2, AlertCircle, Settings,
 } from 'lucide-react';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -285,6 +285,13 @@ function DashboardContent() {
               </div>
               <span className="text-sm font-semibold hidden sm:block">{user.displayName}</span>
             </div>
+            <a
+              href="/settings"
+              className="p-2 rounded-full text-spotify-text-subdued hover:text-white hover:bg-spotify-elevated transition-colors"
+              title="Classification settings"
+            >
+              <Settings className="w-4 h-4" />
+            </a>
             <button
               onClick={() => { localStorage.removeItem('spotify_organizer_token'); router.push('/'); }}
               className="p-2 rounded-full text-spotify-text-subdued hover:text-white hover:bg-spotify-elevated transition-colors"
