@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useEffect, useState, useCallback, useRef } from 'react';
+import { getDimValues, energyCls } from '@/lib/classify';
 import { useParams, useRouter } from 'next/navigation';
 import {
   ArrowLeft, CheckCircle2, Loader2, Music2, Globe, Zap,
@@ -56,22 +57,6 @@ const ENERGY_OPTIONS = ['Low', 'Medium', 'High'];
 const API = process.env.NEXT_PUBLIC_API_URL!;
 const getToken = () => typeof window !== 'undefined' ? localStorage.getItem('spotify_organizer_token') : null;
 const authH = () => ({ Authorization: `Bearer ${getToken()}` } as Record<string, string>);
-
-function getDimValues(ct: ClassifiedTrack, dim: DimKey): string[] {
-  if (dim === 'genre')       return ct.genres;
-  if (dim === 'mood')        return ct.moods;
-  if (dim === 'occasion')    return ct.occasions;
-  if (dim === 'language')    return ct.language ? [ct.language] : [];
-  if (dim === 'era')         return ct.era ? [ct.era] : [];
-  if (dim === 'energyLevel') return ct.energyLevel ? [ct.energyLevel] : [];
-  return [];
-}
-
-function energyCls(e: string) {
-  return e === 'High' ? 'bg-red-500/15 text-red-300'
-    : e === 'Low'  ? 'bg-green-500/15 text-green-300'
-    : 'bg-yellow-500/15 text-yellow-300';
-}
 
 // ─── Chip: removable (for array fields) ──────────────────────────────────────
 

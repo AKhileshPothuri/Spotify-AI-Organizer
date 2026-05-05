@@ -41,7 +41,7 @@ Each element must follow this exact schema:
 }
 The array must have exactly as many elements as tracks given, in the same order.`;
 
-function buildSystemPrompt(taxonomy?: CustomTaxonomy): string {
+export function buildSystemPrompt(taxonomy?: CustomTaxonomy): string {
   if (!taxonomy) return BASE_SYSTEM_PROMPT;
   const constraints: string[] = [];
   if (taxonomy.genres?.length)       constraints.push(`genres: pick ONLY from [${taxonomy.genres.join(', ')}]`);
