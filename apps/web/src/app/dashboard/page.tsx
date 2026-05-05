@@ -263,7 +263,7 @@ function DashboardContent() {
   const syncedCount = syncCount ?? stats?.trackCount ?? 0;
   const spotifyTotal = stats?.spotifyTotal ?? null;
   const syncDone = !syncing && syncedCount > 0;
-  const runActive = run && !['AWAITING_APPROVAL', 'DONE', 'FAILED'].includes(run.status);
+  const runActive = run && ['PENDING', 'FETCHING_TRACKS', 'ENRICHING', 'CLASSIFYING'].includes(run.status);
 
   return (
     <div className="min-h-screen bg-spotify-black">
